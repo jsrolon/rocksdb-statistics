@@ -8,13 +8,14 @@ from typing import TypedDict
 
 DIRNAME = pathlib.Path(__file__).parent
 
-
 class StatType(TypedDict):
     name: str
     regex: str
 
 
 class Statistics:
+    BASE_THREAD_REGEX = "\d{4}\/.+thread\s__THREAD__.+?(\d+\.\d+).+ops\/second.+seconds"
+
     def __init__(self) -> None:
         self.stats: dict[str, StatType] = {
             "uptime": {
@@ -49,6 +50,12 @@ class Statistics:
                 "name": "Interval Compaction",
                 "regex": "Interval\scompaction.*?(\d*\.\d*)\sMB\/s",
             },
+            "allthread_interval_ops": {
+                "name": "Interval operations per second (ops) for all threads",
+            },
+            "thread_interval_ops": {
+                "name": "Interval operations per second (ops) for specific thread",
+            }
         }
 
         self.legend_list: list[str] = []
@@ -62,12 +69,31 @@ class Statistics:
         self, key: str, d: StatType, log: str, steps: list[float] | None = None
     ) -> None:
         matches = self.get_matches(d["regex"], log)
+        if len(matches) > len(steps) or matches[0] is tuple:
+            matches = self.process_threads(matches)
+
         new_filename = self.base_filename + f"_{key}"
         self.save_to_csv_file(matches, new_filename)
 
         coordinates = self.generate_coordinates(matches, steps)
         self.save_coordinates_to_file(coordinates, self.coordinates_filename())
         self.legend_list.append(d["name"])
+
+    def process_threads(self, matches):
+        # we're dealing with a log that has multiple numbers
+        thread_numbers = {int(match[0]) for match in matches}
+        num_threads = max(thread_numbers) + 1
+        processed_matches = []
+        accum = 0
+        counter = 0
+        for i in range(0, len(matches)):
+            accum += float(matches[i][1])
+            counter += 1
+            if counter == num_threads:
+                processed_matches.append(str(accum / num_threads))
+                accum = 0
+                counter = 0
+        return processed_matches
 
     def clean_log(self, log: str) -> list[str]:
         regex = re.compile("(2018\S+).*\(([\d,\.]*)\).*\(([\d,\.]*)\).*\(([\d,\.]*)\)")
@@ -162,6 +188,14 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("log", type=str, help="logfile")
     parser.add_argument("--statistics", type=str, help="logfile")
+
+    parser.add_argument("--thread", type=int, help="When using 'thread_interval_ops', the thread number",
+                        required=False)
+    parser.add_argument("--summarize_kind", type=str,
+                        help="When using 'allthread_interval_ops', the thread summarization strategy",
+                        choices=["mean", "median"],
+                        default="mean",
+                        required=False)
     args = parser.parse_args()
     s = Statistics()
 
@@ -174,5 +208,14 @@ def main() -> None:
         raise KeyError(
             f"Statistic not supported, must use one or more of \"{','.join(s.stats.keys())}\""
         )
+
+    if "allthread_interval_ops" in statistics:
+        s.stats["allthread_interval_ops"]["regex"] = s.BASE_THREAD_REGEX.replace("__THREAD__", "(\d+)")
+
+    if "thread_interval_ops" in statistics:
+        if args.thread is None:
+            raise KeyError(f"--thread N is required when using 'thread_interval_ops'")
+        else:
+            s.stats["thread_interval_ops"]["regex"] = s.BASE_THREAD_REGEX.replace("__THREAD__", str(args.thread))
 
     s.save_all(args.log, statistics)
