@@ -69,7 +69,7 @@ class Statistics:
         self, key: str, d: StatType, log: str, steps: list[float] | None = None
     ) -> None:
         matches = self.get_matches(d["regex"], log)
-        if len(matches) > len(steps) or matches[0] is tuple:
+        if len(matches) > len(steps) or type(matches[0]) is tuple:
             matches = self.process_threads(matches)
 
         new_filename = self.base_filename + f"_{key}"
@@ -136,14 +136,16 @@ class Statistics:
 \\begin{{tikzpicture}}
     \\begin{{axis}}[
         title={self.base_filename.replace("_", " ")},
-        xlabel={{}},
-        ylabel={{MB/s}},
+        xlabel={{time(s)}},
+        ylabel={{ops}},
         legend style={{
             at={{(0.5,-0.2)}},
             anchor=north,legend columns=1
         }},
         ymajorgrids=true,
         grid style=dashed,
+        yticklabel={{\\pgfmathprintnumber{{\\tick}}K}},
+        scaled y ticks=base 10:-3
     ]
 """
         with open(f"output/{filename}", "w") as f:
@@ -153,7 +155,7 @@ class Statistics:
             legend = ", ".join(self.legend_list)
             f.write(
                 f"""
-    \\legend{{{legend}}}
+    \\legend{{baremetal,vfio-user,passthrough,dummy-nvme}}
     \\end{{axis}}
 \\end{{tikzpicture}}
 """
@@ -165,28 +167,29 @@ class Statistics:
         rounded_steps = [round(step, 2) for step in accumulated_steps]
         return rounded_steps
 
-    def save_all(self, log: str, statistics: set[str]) -> None:
-        logfile = pathlib.Path(log)
-        self.base_filename = logfile.stem
-        interval_steps = self.get_steps(self.stats["interval"]["regex"], log)
-        uptime_steps = [
-            float(step)
-            for step in self.get_matches(self.stats["uptime"]["regex"], log)[::2]
-        ]
-        min_interval_step = uptime_steps[0] - interval_steps[0]
-        steps = [round(step - min_interval_step, 2) for step in uptime_steps]
+    def save_all(self, logs: list[str], statistics: set[str]) -> None:
+        for log in logs:
+            logfile = pathlib.Path(log)
+            self.base_filename = logfile.stem
+            interval_steps = self.get_steps(self.stats["interval"]["regex"], log)
+            uptime_steps = [
+                float(step)
+                for step in self.get_matches(self.stats["uptime"]["regex"], log)[::2]
+            ]
+            min_interval_step = uptime_steps[0] - interval_steps[0]
+            steps = [round(step - min_interval_step, 2) for step in uptime_steps]
 
-        for key, value in self.stats.items():
-            if len(statistics) > 0 and key not in statistics:
-                continue
-            self.save_statistic(key, value, log, steps)
+            for key, value in self.stats.items():
+                if len(statistics) > 0 and key not in statistics:
+                    continue
+                self.save_statistic(key, value, log, steps)
 
         self.save_coordinate_file(self.coordinates_filename())
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("log", type=str, help="logfile")
+    parser.add_argument("logs", type=str, nargs='+', help="logfile")
     parser.add_argument("--statistics", type=str, help="logfile")
 
     parser.add_argument("--thread", type=int, help="When using 'thread_interval_ops', the thread number",
@@ -218,4 +221,4 @@ def main() -> None:
         else:
             s.stats["thread_interval_ops"]["regex"] = s.BASE_THREAD_REGEX.replace("__THREAD__", str(args.thread))
 
-    s.save_all(args.log, statistics)
+    s.save_all(args.logs, statistics)
